@@ -16,12 +16,13 @@ admin.initializeApp({
 const db = admin.database();
 const messaging = admin.messaging();
 
-async function sendPush(token, title, body, data = {}) {
+async function sendPush(token, title, body, data) {
+  if (!data) data = {};
   try {
     await messaging.send({
-      token,
-      notification: { title, body },
-      data: Object.fromEntries(Object.entries(data).map(([k,v]) => [k, String(v)])),
+      token: token,
+      notification: { title: title, body: body },
+      data: Object.fromEntries(Object.entries(data).map(function(entry) { return [entry[0], String(entry[1])]; })),
       webpush: {
         notification: {
           icon: 'https://i.imgur.com/7D8u8h6.png',
@@ -39,35 +40,33 @@ async function sendPush(token, title, body, data = {}) {
       err.code === 'messaging/registration-token-not-registered'
     ) {
       const snap = await db.ref('users').orderByChild('fcmToken').equalTo(token).once('value');
-      snap.forEach(child => child.ref.update({ fcmToken: null }));
+      snap.forEach(function(child) { child.ref.update({ fcmToken: null }); });
     }
     return false;
   }
 }
 
 // Listen sa bagong notifications
-db.ref('notifications').on('child_added', async (userSnap) => {
+db.ref('notifications').on('child_added', function(userSnap) {
   const uid = userSnap.key;
-  userSnap.ref.on('child_added', async (notifSnap) => {
+  userSnap.ref.on('child_added', async function(notifSnap) {
     const notif = notifSnap.val();
     if (!notif || notif.pushed) return;
 
-    const userSnap2 = await db.ref(users/${uid}).once('value');
+    const userSnap2 = await db.ref('users/' + uid).once('value');
     const user = userSnap2.val();
     if (!user || !user.fcmToken) return;
 
-    let title = '🔔 Radio Bingo Live';
+    let title = 'Radio Bingo Live';
     let body = notif.msg || 'May bagong notification!';
 
-    switch(notif.type) {
-      case 'pm':      title = '💬 Bagong Message'; break;
-      case 'like':    title = '❤️ Like'; break;
-      case 'comment': title = '💬 Komento'; break;
-      case 'share':   title = '🔁 Share'; break;
-      case 'bingo':   title = '🎱 Bingo!'; break;
-      case 'mention': title = '@ Na-mention ka!'; break;
-      case 'system':  title = '📢 Announcement'; break;
-    }
+    if (notif.type === 'pm')      title = 'Bagong Message';
+    else if (notif.type === 'like')    title = 'Like';
+    else if (notif.type === 'comment') title = 'Komento';
+    else if (notif.type === 'share')   title = 'Share';
+    else if (notif.type === 'bingo')   title = 'Bingo!';
+    else if (notif.type === 'mention') title = 'Na-mention ka!';
+    else if (notif.type === 'system')  title = 'Announcement';
 
     const sent = await sendPush(user.fcmToken, title, body, {
       type: notif.type || 'general',
@@ -79,31 +78,39 @@ db.ref('notifications').on('child_added', async (userSnap) => {
 });
 
 // Listen sa bagong messages
-db.ref('messages').on('child_added', async (msgSnap) => {
+db.ref('messages').on('child_added', async function(msgSnap) {
   const msg = msgSnap.val();
   if (!msg || !msg.to || !msg.from || msg.pushed) return;
   if (msg.from === msg.to) return;
 
-  const userSnap = await db.ref(users/${msg.to}).once('value');
+  const userSnap = await db.ref('users/' + msg.to).once('value');
   const user = userSnap.val();
   if (!user || !user.fcmToken) return;
 
-  const senderSnap = await db.ref(users/${msg.from}).once('value');
+  const senderSnap = await db.ref('users/' + msg.from).once('value');
   const sender = senderSnap.val();
   const senderName = sender ? (sender.name || 'Someone') : 'Someone';
 
-  const body = msg.text
-    ? (msg.text.length > 80 ? msg.text.substring(0, 80) + '...' : msg.text)
-    : '📷 Nagpadala ng larawan';
+  let body = 'Bagong mensahe';
+  if (msg.text) {
+    body = msg.text.length > 80 ? msg.text.substring(0, 80) + '...' : msg.text;
+  } else if (msg.image) {
+    body = 'Nagpadala ng larawan';
+  }
 
-  const sent = await sendPush(user.fcmToken,💬 ${senderName}`, body, {
-    type: 'pm', from: msg.from
+  const sent = await sendPush(user.fcmToken, 'Message mula kay ' + senderName, body, {
+    type: 'pm',
+    from: msg.from
   });
 
   if (sent) msgSnap.ref.update({ pushed: true });
 });
 
-app.get('/', (req, res) => res.send('Radio Bingo Push Server is running! 🎱'));
+app.get('/', function(req, res) {
+  res.send('Radio Bingo Push Server is running!');
+});
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(Server running on port ${PORT}));
+app.listen(PORT, function() {
+  console.log('Server running on port ' + PORT);
+});
