@@ -16,25 +16,45 @@ admin.initializeApp({
 const db = admin.database();
 const messaging = admin.messaging();
 
+// Per-type webpush config — tugma sa firebase-messaging-sw.js profiles
+const WEBPUSH_PROFILES = {
+  pm:        { vibrate: [100, 50, 100],                       requireInteraction: true  },
+  bingo:     { vibrate: [300, 100, 300, 100, 300, 100, 300],  requireInteraction: true  },
+  game_soon: { vibrate: [200, 100, 200, 100, 200],            requireInteraction: true  },
+  win:       { vibrate: [100, 50, 100, 50, 100, 50, 400],     requireInteraction: true  },
+  like:      { vibrate: [100],                                requireInteraction: false },
+  comment:   { vibrate: [100, 50, 100],                       requireInteraction: false },
+  follow:    { vibrate: [100, 50, 100],                       requireInteraction: false },
+  coins:     { vibrate: [100, 50, 100, 50, 200],              requireInteraction: false },
+  promo:     { vibrate: [200, 100, 200],                      requireInteraction: true  },
+  system:    { vibrate: [200, 100, 200],                      requireInteraction: false }
+};
+
 async function sendPush(token, title, body, data) {
   if (!data) data = {};
+  const type    = data.type || 'system';
+  const profile = WEBPUSH_PROFILES[type] || { vibrate: [200, 100, 200], requireInteraction: false };
+
   try {
     await messaging.send({
       token: token,
       notification: { title: title, body: body },
-      data: Object.fromEntries(Object.entries(data).map(function(entry) { return [entry[0], String(entry[1])]; })),
+      data: Object.fromEntries(
+        Object.entries(data).map(function(entry) { return [entry[0], String(entry[1])]; })
+      ),
       webpush: {
         notification: {
-          icon: 'https://i.imgur.com/7D8u8h6.png',
-          badge: 'https://i.imgur.com/7D8u8h6.png',
-          vibrate: [200, 100, 200],
-          requireInteraction: data.type === 'pm' || data.type === 'bingo'
-        }
+          icon:               'https://i.imgur.com/7D8u8h6.png',
+          badge:              'https://i.imgur.com/7D8u8h6.png',
+          vibrate:            profile.vibrate,
+          requireInteraction: profile.requireInteraction
+        },
+        fcm_options: { link: '/' }
       }
     });
     return true;
   } catch(err) {
-    console.error('Push failed:', err.code);
+    console.error('Push failed:', err.code, '| type:', type);
     if (
       err.code === 'messaging/invalid-registration-token' ||
       err.code === 'messaging/registration-token-not-registered'
@@ -45,6 +65,25 @@ async function sendPush(token, title, body, data) {
     return false;
   }
 }
+
+// ============================================================
+// NOTIFICATION TITLES — may emoji, parang sikat na app
+// ============================================================
+const NOTIF_TITLES = {
+  pm:        '💬 New Message',
+  like:      '❤️ Someone liked your post',
+  comment:   '💬 New comment on your post',
+  share:     '🔁 Someone shared your post',
+  mention:   '🏷️ You were mentioned',
+  follow:    '👤 New Follower',
+  bingo:     '🎱 BINGO CALL!',
+  game_soon: '⏰ Game is starting soon!',
+  win:       '🏆 You won!',
+  coins:     '🪙 You received Coins!',
+  promo:     '🎟️ You have a special promo!',
+  system:    '📢 Admin Announcement',
+  gift:      '🎁 You received a Gift!'
+};
 
 // Listen sa bagong notifications
 db.ref('notifications').on('child_added', function(userSnap) {
@@ -57,20 +96,15 @@ db.ref('notifications').on('child_added', function(userSnap) {
     const user = userSnap2.val();
     if (!user || !user.fcmToken) return;
 
-    let title = 'Radio Bingo Live';
-    let body = notif.msg || 'May bagong notification!';
-
-    if (notif.type === 'pm')      title = 'Bagong Message';
-    else if (notif.type === 'like')    title = 'Like';
-    else if (notif.type === 'comment') title = 'Komento';
-    else if (notif.type === 'share')   title = 'Share';
-    else if (notif.type === 'bingo')   title = 'Bingo!';
-    else if (notif.type === 'mention') title = 'Na-mention ka!';
-    else if (notif.type === 'system')  title = 'Announcement';
+    const type  = notif.type || 'system';
+    const title = NOTIF_TITLES[type] || '🔔 Radio Bingo Live';
+    const body  = notif.msg  || 'You have a new notification!';
 
     const sent = await sendPush(user.fcmToken, title, body, {
-      type: notif.type || 'general',
-      from: notif.from || ''
+      type:      type,
+      senderUid: notif.from    || '',
+      postKey:   notif.postKey || '',
+      url:       notif.url     || '/'
     });
 
     if (sent) notifSnap.ref.update({ pushed: true });
@@ -91,16 +125,17 @@ db.ref('messages').on('child_added', async function(msgSnap) {
   const sender = senderSnap.val();
   const senderName = sender ? (sender.name || 'Someone') : 'Someone';
 
-  let body = 'Bagong mensahe';
-  if (msg.text) {
-    body = msg.text.length > 80 ? msg.text.substring(0, 80) + '...' : msg.text;
-  } else if (msg.image) {
-    body = 'Nagpadala ng larawan';
-  }
+  // Rich message preview
+  let body = 'Sent you a message';
+  if      (msg.text)    body = msg.text.length > 80 ? msg.text.substring(0, 80) + '...' : msg.text;
+  else if (msg.image)   body = '📷 Sent a photo';
+  else if (msg.audio)   body = '🎙️ Sent a voice note';
+  else if (msg.isSticker) body = '😄 Sent a sticker';
 
-  const sent = await sendPush(user.fcmToken, 'Message mula kay ' + senderName, body, {
-    type: 'pm',
-    from: msg.from
+  const sent = await sendPush(user.fcmToken, '💬 ' + senderName, body, {
+    type:      'pm',
+    senderUid: msg.from,
+    url:       '/?section=messages'
   });
 
   if (sent) msgSnap.ref.update({ pushed: true });
